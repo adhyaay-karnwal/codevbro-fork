@@ -843,3 +843,98 @@ input {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
 }
+
+/* Gemini Results Modal Styling */
+#geminiResultsModal .modal-content {
+    max-width: 600px; /* Slightly wider for content */
+    max-height: 80vh; /* Max height to prevent overflow on small screens */
+    overflow-y: auto; /* Allow scrolling for content */
+}
+
+#geminiResultsModal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+}
+
+#geminiResultsModal .modal-header h2 {
+    margin: 0;
+}
+
+#geminiResultsModal .close-modal {
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 5px;
+}
+
+#geminiDescription h4, #geminiSkills h4 {
+    margin-top: 0;
+    color: var(--text-color);
+}
+
+#geminiDescription p {
+    color: var(--text-color);
+    line-height: 1.6;
+    white-space: pre-wrap; /* Respect newlines from Gemini description */
+}
+
+#geminiSkills ul {
+    list-style-type: none;
+    padding: 0;
+    margin: 0;
+}
+
+#geminiSkills li {
+    margin-bottom: 12px;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-color); /* Match theme background */
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+#geminiSkills li .action-type {
+    font-weight: bold;
+    color: var(--text-color); /* Use theme's text color */
+}
+
+#geminiSkills li .action-url {
+    color: #555; /* Keep a slightly muted color, or use a theme variable */
+    font-size: 0.9em;
+    display: block; /* Make it take its own line for clarity */
+    margin-top: 4px;
+    word-break: break-all;
+}
+:root[data-theme="dark"] #geminiSkills li .action-url {
+    color: #aaa;
+}
+
+
+#geminiSkills li .action-selector {
+    font-family: monospace;
+    background-color: var(--button-bg); /* Use button background for contrast */
+    color: var(--text-color);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    display: inline-block; /* Keep it inline with action type */
+    margin: 0 2px;
+}
+
+#geminiSkills li .action-value {
+    color: green; /* Standard color for values, or use a theme variable */
+    font-weight: bold;
+}
+:root[data-theme="dark"] #geminiSkills li .action-value {
+    color: lightgreen;
+}
+
+#geminiSkills li hr {
+    border: none;
+    border-top: 1px dashed var(--border-color);
+    margin: 8px 0;
+}

@@ -1,11 +1,22 @@
-const { app, BrowserWindow, ipcMain, session, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, desktopCapturer, dialog } = require('electron');
 const path = require('path');
 const { net } = require('electron');
 const https = require('https');
 const os = require('os');
+const fs = require('fs'); // Added for file system operations
+const axios = require('axios'); // Added for Gemini API
+const FormData = require('form-data'); // Added for Gemini API
 const { networkInterfaces } = require('systeminformation');
 
 let Store;
+
+// Gemini API Configuration - IMPORTANT: Replace with actual values or use environment variables
+const GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'; 
+const GEMINI_API_ENDPOINT = 'YOUR_GEMINI_VIDEO_ENDPOINT_URL';
+
+// Global variables for recording
+let recordedChunks = [];
+let recordedVideoPath = null;
 
 async function initStore() {
     try {
@@ -440,6 +451,9 @@ async function createWindow() {
     // Setup settings handlers
     setupSettingsHandlers();
 
+    // Setup recording handlers
+    setupRecordingHandlers(mainWindow);
+
     // Apply initial settings
     if (global.settingsStore) {
         applySettings(global.settingsStore.store);
@@ -450,6 +464,153 @@ async function createWindow() {
     mainWindow.setTitle('codebro');
     // mainWindow.webContents.openDevTools(); // Open DevTools for debugging
 }
+
+// Recording Handlers Function
+function setupRecordingHandlers(mainWindow) {
+    ipcMain.handle('get-screen-source-id', async (event) => {
+        const triggeringWindow = BrowserWindow.fromWebContents(event.sender);
+        if (!triggeringWindow) {
+            console.error('Could not find the triggering window.');
+            return null;
+        }
+
+        const sources = await desktopCapturer.getSources({ types: ['window', 'screen'] });
+        // Try to find the specific window that initiated the request.
+        // This can be tricky. Comparing titles or trying to match WebContents ID if available.
+        // For 'codebro', we might assume it's the main window if the title matches.
+        let sourceToCapture = sources.find(source => source.name === 'codebro' || source.name === mainWindow.getTitle());
+        
+        if (!sourceToCapture) {
+            // Fallback or more sophisticated selection
+            // For now, let's try to find the window by its ID if possible, or just the first window source
+            sourceToCapture = sources.find(source => source.id.startsWith('window:' + triggeringWindow.webContents.id) || source.id.startsWith('window:' + triggeringWindow.id));
+             if (!sourceToCapture && sources.length > 0) {
+                // As a last resort pick the first window, or the entire screen.
+                // This part might need user interaction in a real app (e.g. a picker)
+                const windowSources = sources.filter(s => s.type === 'window' || s.name === 'Entire screen' || s.name === 'Screen 1');
+                if (windowSources.length > 0) sourceToCapture = windowSources[0];
+                else sourceToCapture = sources[0]; // Default to the first available source
+            }
+        }
+
+        if (sourceToCapture) {
+            console.log('Source found for recording:', sourceToCapture.name, sourceToCapture.id);
+            return sourceToCapture.id;
+        } else {
+            console.error('No suitable source found for recording.');
+            // Optionally, show a dialog to the user
+            // dialog.showErrorBox('Recording Error', 'No suitable screen or window found to record.');
+            return null;
+        }
+    });
+
+    ipcMain.on('reset-recording-state', () => {
+        recordedChunks = [];
+        recordedVideoPath = null;
+        console.log('Recording state reset.');
+    });
+
+    ipcMain.on('recording-chunk', (event, chunk) => {
+        if (chunk && chunk.byteLength > 0) {
+            recordedChunks.push(Buffer.from(chunk));
+        }
+    });
+
+    ipcMain.handle('stop-recording-finalize', async () => {
+        if (recordedChunks.length === 0) {
+            console.log('No recorded chunks to save.');
+            // It's important to reset recordedVideoPath here too if we return early
+            // or ensure it's only set on successful save.
+            // For now, this path is okay as it's reset by 'reset-recording-state'
+            // or before a new recording.
+            return { success: false, message: "No data recorded." };
+        }
+
+        const buffer = Buffer.concat(recordedChunks);
+        const tempDir = os.tmpdir();
+        recordedVideoPath = path.join(tempDir, `recording-${Date.now()}.webm`);
+
+        try {
+            fs.writeFileSync(recordedVideoPath, buffer);
+            console.log('Recording stopped. Video saved to:', recordedVideoPath);
+            const filePath = recordedVideoPath; 
+            recordedChunks = []; 
+            return { success: true, filePath: filePath };
+        } catch (error) {
+            console.error('Failed to save video to disk:', error);
+            recordedChunks = [];
+            return { success: false, error: `Failed to save video: ${error.code === 'ENOSPC' ? 'Disk full or insufficient space.' : 'Permission issue or other error.'} (${error.message})` };
+        }
+    });
+
+    ipcMain.handle('upload-to-gemini', async (event, { actions, videoPath }) => {
+        console.log('Received upload-to-gemini request with videoPath:', videoPath);
+        if (GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY' || GEMINI_API_ENDPOINT === 'YOUR_GEMINI_VIDEO_ENDPOINT_URL' || !GEMINI_API_KEY || !GEMINI_API_ENDPOINT) {
+            console.warn('Gemini API Key or Endpoint is not configured correctly. Please check main.js.');
+            return { success: false, error: 'Gemini API is not configured. Please contact support or check application settings.' };
+        }
+
+        if (!videoPath || !fs.existsSync(videoPath)) {
+            console.error('Video file does not exist at path:', videoPath);
+            return { success: false, error: 'Video file for analysis not found. It might have been moved or deleted.' };
+        }
+
+        const form = new FormData();
+        try {
+            const videoStream = fs.createReadStream(videoPath);
+            videoStream.on('error', (streamError) => {
+                // This error handler is for the stream itself. If it fires, the upload might already be problematic.
+                console.error('Error with video file stream:', streamError);
+                // Note: Returning from here won't stop the outer function if axios.post has already been initiated.
+                // This error should ideally be caught before form.append or handled by axios if it fails to read.
+            });
+            form.append('video', videoStream, { filename: path.basename(videoPath) });
+            form.append('actions', JSON.stringify(actions), { contentType: 'application/json' });
+        } catch (fsError) {
+            console.error('Error preparing form data (e.g., reading video file) for Gemini:', fsError);
+            return { success: false, error: `Could not prepare video for analysis: ${fsError.message}. Please ensure the file is accessible.` };
+        }
+        
+        console.log('Attempting to upload to Gemini endpoint:', GEMINI_API_ENDPOINT);
+
+        try {
+            const response = await axios.post(GEMINI_API_ENDPOINT, form, {
+                headers: {
+                    ...form.getHeaders(),
+                    'Authorization': `Bearer ${GEMINI_API_KEY}`,
+                },
+                timeout: 180000, 
+            });
+
+            console.log('Gemini API Success Response:', response.data);
+            // Optional: Delete video after successful upload
+            // fs.unlink(videoPath, (delError) => { if(delError) console.error('Error deleting temporary video file:', delError); else console.log('Temporary video file deleted:', videoPath); });
+            return { success: true, data: response.data };
+
+        } catch (error) {
+            let userFriendlyError = 'An unexpected error occurred while contacting the AI analysis service.';
+            if (error.code === 'ECONNABORTED') {
+                userFriendlyError = 'The AI analysis service timed out. Please try again later.';
+            } else if (error.response) {
+                console.error('Gemini API Error Response:', error.response.status, error.response.data);
+                if (error.response.status === 401 || error.response.status === 403) {
+                    userFriendlyError = 'Invalid Gemini API Key. Please check the application configuration.';
+                } else if (error.response.status >= 500) {
+                    userFriendlyError = 'The AI analysis service encountered an internal error. Please try again later.';
+                } else {
+                    userFriendlyError = `AI analysis service returned an error (Status ${error.response.status}).`;
+                }
+            } else if (error.request) {
+                console.error('Gemini API No Response (Network Error):', error.message); // error.request is often empty for network errors
+                userFriendlyError = 'Failed to connect to the AI analysis service. Please check your internet connection.';
+            } else {
+                console.error('Gemini API Request Setup Error:', error.message);
+            }
+            return { success: false, error: userFriendlyError };
+        }
+    });
+}
+
 
 const PROXY_SERVERS = {
     us: 'us-wa.proxyme.org',

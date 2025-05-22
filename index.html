@@ -29,8 +29,8 @@
                     </div>
                 </div>
             </div>
-            <button id="go">Go</button>
-            
+            <button id="go">Go</button
+            <button id="recordBtn">Start Recording</button>
             <button id="themeToggle" onclick="toggleTheme()">🌓 Theme</button>
             <button id="showDownloads">📥</button>
             <button id="vpnToggle" onclick="showVPNModal()">🌐</button>
@@ -196,5 +196,24 @@
     <script src="render/tab.js"></script>
     <script src="render/theme.js"></script>
 
+    <!-- Gemini AI Analysis Results Modal -->
+    <div id="geminiResultsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>AI Analysis Results</h2>
+                <span class="close-modal" id="closeGeminiResultsModal">&times;</span>
+            </div>
+            <div id="geminiDescription" style="padding: 10px; border-bottom: 1px solid #eee;">
+                <h4>Description:</h4>
+                <p>Analysis description will appear here.</p>
+            </div>
+            <div id="geminiSkills" style="padding: 10px;">
+                <h4>Identified Skills/Actions:</h4>
+                <ul>
+                    <!-- Skills/actions will be populated here by JavaScript -->
+                </ul>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
