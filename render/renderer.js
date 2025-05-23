@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
     // Enhanced navigation function
-    function navigateTo(input) {
+    window.navigateTo = function(input) {
         input = input.trim();
         const urlPattern = /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/;
         const ipPattern = /^(https?:\/\/)?((?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d+)?$/;
