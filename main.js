@@ -11,11 +11,15 @@ const { networkInterfaces } = require('systeminformation');
 let Store;
 
 // Gemini API Configuration - IMPORTANT: Replace with actual values or use environment variables
-const GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'; 
-const GEMINI_API_ENDPOINT = 'YOUR_GEMINI_VIDEO_ENDPOINT_URL';
+// The API key for authenticating requests to the Gemini API.
+const GEMINI_API_KEY = 'AIzaSyA3k-bhoOYLjxnxPr4mBHI8x-w1RN3N3zE';
+// The specific endpoint URL for the Gemini model used for content generation (e.g., video analysis).
+const GEMINI_API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
-// Global variables for recording
+// Global variables for managing the video recording process.
+// Stores chunks of video data as they are received from the MediaRecorder.
 let recordedChunks = [];
+// Holds the file system path to the fully recorded video file once finalized.
 let recordedVideoPath = null;
 
 async function initStore() {
@@ -466,7 +470,14 @@ async function createWindow() {
 }
 
 // Recording Handlers Function
+/**
+ * Sets up IPC handlers related to screen recording and Gemini AI analysis.
+ * @param {BrowserWindow} mainWindow - The main application window instance.
+ */
 function setupRecordingHandlers(mainWindow) {
+    // Handles requests from the renderer process to get a desktopCapturer source ID.
+    // This ID is necessary for the renderer to start a MediaStream recording of the screen or a window.
+    // It tries to find the main application window ('codebro') first, then falls back to other available sources.
     ipcMain.handle('get-screen-source-id', async (event) => {
         const triggeringWindow = BrowserWindow.fromWebContents(event.sender);
         if (!triggeringWindow) {
@@ -504,68 +515,118 @@ function setupRecordingHandlers(mainWindow) {
         }
     });
 
+    // Resets the global recording state variables.
+    // This is typically called before starting a new recording to clear any previous data.
     ipcMain.on('reset-recording-state', () => {
-        recordedChunks = [];
-        recordedVideoPath = null;
+        recordedChunks = []; // Clear the array of recorded video data chunks.
+        recordedVideoPath = null; // Reset the path to any previously saved video file.
         console.log('Recording state reset.');
     });
 
+    // Receives a chunk of video data (as a Uint8Array) from the renderer process.
+    // These chunks are collected in the `recordedChunks` array.
     ipcMain.on('recording-chunk', (event, chunk) => {
         if (chunk && chunk.byteLength > 0) {
-            recordedChunks.push(Buffer.from(chunk));
+            recordedChunks.push(Buffer.from(chunk)); // Convert Uint8Array to Buffer for easier handling.
         }
     });
 
+    // Handles the finalization of the video recording.
+    // Concatenates all received video chunks into a single Buffer, then writes it to a temporary .webm file.
+    // Returns an object indicating success or failure, and the filePath if successful.
+    // If no chunks were recorded, it returns { success: false, message: "No data recorded." }.
     ipcMain.handle('stop-recording-finalize', async () => {
         if (recordedChunks.length === 0) {
             console.log('No recorded chunks to save.');
-            // It's important to reset recordedVideoPath here too if we return early
-            // or ensure it's only set on successful save.
-            // For now, this path is okay as it's reset by 'reset-recording-state'
-            // or before a new recording.
             return { success: false, message: "No data recorded." };
         }
 
-        const buffer = Buffer.concat(recordedChunks);
-        const tempDir = os.tmpdir();
+        const buffer = Buffer.concat(recordedChunks); // Combine all chunks.
+        const tempDir = os.tmpdir(); // Get the system's temporary directory.
+        // Define a unique filename for the recording.
         recordedVideoPath = path.join(tempDir, `recording-${Date.now()}.webm`);
 
         try {
-            fs.writeFileSync(recordedVideoPath, buffer);
+            fs.writeFileSync(recordedVideoPath, buffer); // Write the video file.
             console.log('Recording stopped. Video saved to:', recordedVideoPath);
             const filePath = recordedVideoPath; 
-            recordedChunks = []; 
+            recordedChunks = []; // Clear chunks after saving.
+            // Return success and the path to the saved video.
             return { success: true, filePath: filePath };
         } catch (error) {
             console.error('Failed to save video to disk:', error);
-            recordedChunks = [];
+            recordedChunks = []; // Clear chunks even on error.
+            // Return failure and an error message, checking for common issues like disk space.
             return { success: false, error: `Failed to save video: ${error.code === 'ENOSPC' ? 'Disk full or insufficient space.' : 'Permission issue or other error.'} (${error.message})` };
         }
     });
 
+    // Handles the request to upload the recorded video and associated user actions to the Gemini API for analysis.
+    // @param {object} event - The IPC event object.
+    // @param {object} params - An object containing the data to upload.
+    // @param {Array<object>} params.actions - An array of user actions recorded during the session.
+    // @param {string} params.videoPath - The file system path to the recorded video.
     ipcMain.handle('upload-to-gemini', async (event, { actions, videoPath }) => {
         console.log('Received upload-to-gemini request with videoPath:', videoPath);
+
+        // Check if API key and endpoint are configured. Placeholder values indicate misconfiguration.
         if (GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY' || GEMINI_API_ENDPOINT === 'YOUR_GEMINI_VIDEO_ENDPOINT_URL' || !GEMINI_API_KEY || !GEMINI_API_ENDPOINT) {
             console.warn('Gemini API Key or Endpoint is not configured correctly. Please check main.js.');
             return { success: false, error: 'Gemini API is not configured. Please contact support or check application settings.' };
         }
 
+        // Ensure the video file exists before attempting to upload.
         if (!videoPath || !fs.existsSync(videoPath)) {
             console.error('Video file does not exist at path:', videoPath);
             return { success: false, error: 'Video file for analysis not found. It might have been moved or deleted.' };
         }
 
+        // Create a FormData object to send multipart/form-data.
         const form = new FormData();
         try {
+            // Create a readable stream for the video file.
             const videoStream = fs.createReadStream(videoPath);
             videoStream.on('error', (streamError) => {
-                // This error handler is for the stream itself. If it fires, the upload might already be problematic.
                 console.error('Error with video file stream:', streamError);
-                // Note: Returning from here won't stop the outer function if axios.post has already been initiated.
-                // This error should ideally be caught before form.append or handled by axios if it fails to read.
             });
+            // Append the video file to the form.
             form.append('video', videoStream, { filename: path.basename(videoPath) });
-            form.append('actions', JSON.stringify(actions), { contentType: 'application/json' });
+
+            // Convert the user actions array to a pretty-printed JSON string.
+            const actionsJSON = JSON.stringify(actions, null, 2);
+            // Construct the detailed text prompt for the Gemini API.
+            // This prompt includes instructions for analysis and the JSON string of user actions.
+            const promptText = `
+Please analyze the following user session, which includes a screen recording (provided as 'video') and a list of user actions (provided below in JSON format).
+
+Your task is to:
+1. Provide a concise overall description of what the user was trying to achieve.
+2. Identify and list any reproducible "skills" or multi-step tasks performed by the user. A skill should be a sequence of actions that achieves a specific goal and could potentially be automated.
+   - For each skill, give a brief title (e.g., "Logged into ExampleWebsite," "Searched for product X," "Filled out contact form").
+   - Then, list the key actions involved in that skill, referencing the provided JSON data where helpful (e.g., "Clicked button 'loginBtn', Typed into 'username' field, Navigated to '/dashboard'").
+   - Aim to make the skill description clear enough for an AI agent to understand and reproduce.
+
+Format your response as follows:
+DESCRIPTION:
+[Your overall description here]
+
+SKILLS:
+- SKILL TITLE: [Title of Skill 1]
+  ACTIONS:
+  - [Action 1 from JSON, e.g., Clicked 'button#id']
+  - [Action 2 from JSON, e.g., Typed 'hello' into 'input#name']
+- SKILL TITLE: [Title of Skill 2]
+  ACTIONS:
+  - [Action 1]
+  - [Action 2]
+(and so on)
+
+User Actions JSON:
+${actionsJSON}
+`;
+            // Append the prompt text to the form.
+            form.append('actions', promptText, { contentType: 'text/plain' });
+
         } catch (fsError) {
             console.error('Error preparing form data (e.g., reading video file) for Gemini:', fsError);
             return { success: false, error: `Could not prepare video for analysis: ${fsError.message}. Please ensure the file is accessible.` };
@@ -574,24 +635,25 @@ function setupRecordingHandlers(mainWindow) {
         console.log('Attempting to upload to Gemini endpoint:', GEMINI_API_ENDPOINT);
 
         try {
+            // Make the POST request to the Gemini API endpoint.
             const response = await axios.post(GEMINI_API_ENDPOINT, form, {
                 headers: {
-                    ...form.getHeaders(),
-                    'Authorization': `Bearer ${GEMINI_API_KEY}`,
+                    ...form.getHeaders(), // Get headers from FormData (e.g., Content-Type for multipart).
+                    'Authorization': `Bearer ${GEMINI_API_KEY}`, // Add Bearer token for authentication.
                 },
-                timeout: 180000, 
+                timeout: 180000, // Set a timeout for the request (e.g., 180 seconds).
             });
 
             console.log('Gemini API Success Response:', response.data);
-            // Optional: Delete video after successful upload
-            // fs.unlink(videoPath, (delError) => { if(delError) console.error('Error deleting temporary video file:', delError); else console.log('Temporary video file deleted:', videoPath); });
+            // On success, return an object indicating success and the data from the API response.
             return { success: true, data: response.data };
 
         } catch (error) {
+            // Handle various types of errors that can occur during the API call.
             let userFriendlyError = 'An unexpected error occurred while contacting the AI analysis service.';
             if (error.code === 'ECONNABORTED') {
                 userFriendlyError = 'The AI analysis service timed out. Please try again later.';
-            } else if (error.response) {
+            } else if (error.response) { // Errors from the API (e.g., 4xx, 5xx status codes).
                 console.error('Gemini API Error Response:', error.response.status, error.response.data);
                 if (error.response.status === 401 || error.response.status === 403) {
                     userFriendlyError = 'Invalid Gemini API Key. Please check the application configuration.';
@@ -600,13 +662,26 @@ function setupRecordingHandlers(mainWindow) {
                 } else {
                     userFriendlyError = `AI analysis service returned an error (Status ${error.response.status}).`;
                 }
-            } else if (error.request) {
-                console.error('Gemini API No Response (Network Error):', error.message); // error.request is often empty for network errors
+            } else if (error.request) { // Errors where the request was made but no response was received.
+                console.error('Gemini API No Response (Network Error):', error.message);
                 userFriendlyError = 'Failed to connect to the AI analysis service. Please check your internet connection.';
-            } else {
+            } else { // Errors in setting up the request.
                 console.error('Gemini API Request Setup Error:', error.message);
             }
+            // Return failure and a user-friendly error message.
             return { success: false, error: userFriendlyError };
+        } finally {
+            // This block executes regardless of whether the try/catch block succeeded or failed.
+            // It's used here to ensure the temporary video file is deleted.
+            if (videoPath && fs.existsSync(videoPath)) {
+                fs.unlink(videoPath, (err) => {
+                    if (err) {
+                        console.error('Failed to delete temporary video file:', videoPath, err);
+                    } else {
+                        console.log('Temporary video file deleted successfully:', videoPath);
+                    }
+                });
+            }
         }
     });
 }
