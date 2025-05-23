@@ -1,5 +1,5 @@
 // Download Management
-const { ipcRenderer, shell } = require('electron');
+const { shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
