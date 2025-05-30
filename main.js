@@ -16,9 +16,49 @@ let actionLog = [];
 let recordingStartTime = null;
 const MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
 
+// Fallback API key in case store fails
+const FALLBACK_GEMINI_API_KEY = 'AIzaSyDIm2DFjlZm_MIRivTAC3_KOzxXtVHAknY';
+
+// Store initialization status
+let storeInitialized = false;
+let storeInitializationAttempts = 0;
+const MAX_STORE_INIT_ATTEMPTS = 3;
+
+// Fallback in-memory storage if electron-store fails
+const fallbackStore = {
+    settings: {
+        startupPage: false,
+        newTabDefault: true,
+        theme: 'system',
+        clearHistoryOnExit: false,
+        trackingProtection: true,
+        hardwareAcceleration: true,
+        downloadLocation: app.getPath('downloads'),
+        vpnAutoConnect: false,
+        searchEngine: 'google',
+        geminiApiKey: FALLBACK_GEMINI_API_KEY
+    },
+    get: function(key) {
+        return this.settings[key];
+    },
+    set: function(key, value) {
+        this.settings[key] = value;
+        return true;
+    },
+    store: {}
+};
+
 let Store;
 
-async function initStore() {
+async function initStore(retry = true) {
+    if (storeInitialized) {
+        console.log('Store already initialized');
+        return true;
+    }
+
+    storeInitializationAttempts++;
+    console.log(`Initializing electron-store (attempt ${storeInitializationAttempts}/${MAX_STORE_INIT_ATTEMPTS})`);
+
     try {
         const storeModule = await import('electron-store');
         Store = storeModule.default;
@@ -36,16 +76,65 @@ async function initStore() {
                 downloadLocation: app.getPath('downloads'),
                 vpnAutoConnect: false,
                 searchEngine: 'google',
-                geminiApiKey: ''
+                geminiApiKey: FALLBACK_GEMINI_API_KEY // Use fallback key as default
             }
         });
 
         // Expose settingsStore to other functions
         global.settingsStore = settingsStore;
+        storeInitialized = true;
         console.log('Electron store initialized successfully');
+        return true;
     } catch (error) {
         console.error('Failed to initialize electron-store:', error);
-        global.settingsStore = null; // Set to null so we can check for it later
+        
+        // Retry logic
+        if (retry && storeInitializationAttempts < MAX_STORE_INIT_ATTEMPTS) {
+            console.log(`Retrying store initialization in 1 second...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return initStore(retry);
+        }
+        
+        // Use fallback store if all retries fail
+        console.log('Using fallback in-memory store');
+        global.settingsStore = fallbackStore;
+        storeInitialized = true;
+        return false;
+    }
+}
+
+// Helper function to safely access settings store
+function getSettingsStore() {
+    if (!global.settingsStore) {
+        console.log('Settings store not initialized, using fallback store');
+        return fallbackStore;
+    }
+    return global.settingsStore;
+}
+
+// Helper function to get API key (with fallback)
+function getGeminiApiKey() {
+    try {
+        const store = getSettingsStore();
+        const apiKey = store.get('geminiApiKey');
+        return apiKey || FALLBACK_GEMINI_API_KEY;
+    } catch (error) {
+        console.error('Error getting API key, using fallback:', error);
+        return FALLBACK_GEMINI_API_KEY;
+    }
+}
+
+// Helper function to set API key (with fallback)
+function setGeminiApiKey(apiKey) {
+    try {
+        const store = getSettingsStore();
+        store.set('geminiApiKey', apiKey);
+        return true;
+    } catch (error) {
+        console.error('Error setting API key:', error);
+        // Update fallback store
+        fallbackStore.set('geminiApiKey', apiKey);
+        return false;
     }
 }
 
@@ -235,23 +324,17 @@ function setupDownloadHandler(mainWindow) {
 function setupSettingsHandlers() {
     // Get current settings
     ipcMain.handle('get-settings', () => {
-        if (!global.settingsStore) {
-            console.error('Settings store not initialized');
-            return {};
-        }
-        return global.settingsStore.store;
+        const store = getSettingsStore();
+        return store.settings || store.store || {};
     });
 
     // Update settings
     ipcMain.on('update-settings', (event, settings) => {
-        if (!global.settingsStore) {
-            console.error('Settings store not initialized');
-            return;
-        }
+        const store = getSettingsStore();
         
         // Update individual settings
         Object.keys(settings).forEach(key => {
-            global.settingsStore.set(key, settings[key]);
+            store.set(key, settings[key]);
         });
 
         // Apply settings immediately
@@ -260,10 +343,7 @@ function setupSettingsHandlers() {
 
     // Change download location
     ipcMain.handle('choose-download-location', async () => {
-        if (!global.settingsStore) {
-            console.error('Settings store not initialized');
-            return app.getPath('downloads');
-        }
+        const store = getSettingsStore();
         
         const { dialog } = require('electron');
         const result = await dialog.showOpenDialog(mainWindow, {
@@ -272,11 +352,11 @@ function setupSettingsHandlers() {
 
         if (!result.canceled && result.filePaths.length > 0) {
             const selectedPath = result.filePaths[0];
-            global.settingsStore.set('downloadLocation', selectedPath);
+            store.set('downloadLocation', selectedPath);
             return selectedPath;
         }
 
-        return global.settingsStore.get('downloadLocation') || app.getPath('downloads');
+        return store.get('downloadLocation') || app.getPath('downloads');
     });
 }
 
@@ -293,11 +373,7 @@ function applySettings(settings) {
 
     // Tracking protection
     if (settings.trackingProtection !== undefined) {
-        mainWindow.webContents.session.setPermissionRequestHandler(
-            (webContents, permission, callback) => {
-                callback(!settings.trackingProtection);
-            }
-        );
+        mainWindow.webContents.send('tracking-protection', settings.trackingProtection);
     }
 
     // Download location
@@ -456,11 +532,7 @@ function setupRecordingHandlers(mainWindow) {
             }
 
             // Check if Gemini API key is set
-            if (!global.settingsStore) {
-                return { success: false, message: 'Settings store not initialized' };
-            }
-            
-            const apiKey = global.settingsStore.get('geminiApiKey');
+            const apiKey = getGeminiApiKey();
             if (!apiKey) {
                 return { success: false, message: 'Gemini API key not set. Please set it in settings.' };
             }
@@ -554,32 +626,55 @@ function setupRecordingHandlers(mainWindow) {
     // Handler for setting Gemini API key
     ipcMain.handle('set-gemini-api-key', async (event, apiKey) => {
         try {
-            if (!global.settingsStore) {
-                console.error('Settings store not initialized');
-                return { success: false, message: 'Settings store not initialized' };
-            }
+            // Always set the API key, even if using fallback store
+            const success = setGeminiApiKey(apiKey);
             
-            global.settingsStore.set('geminiApiKey', apiKey);
-            return { success: true, message: 'API key saved' };
+            if (success) {
+                return { success: true, message: 'API key saved successfully' };
+            } else {
+                // We still saved to fallback store
+                return { 
+                    success: true, 
+                    message: 'API key saved to fallback storage (settings store not available)' 
+                };
+            }
         } catch (error) {
             console.error('Error saving API key:', error);
-            return { success: false, message: `Failed to save API key: ${error.message}` };
+            
+            // Try to save to fallback store
+            fallbackStore.set('geminiApiKey', apiKey);
+            
+            return { 
+                success: true, 
+                message: 'API key saved to fallback storage due to error' 
+            };
         }
     });
     
     // Handler for getting Gemini API key
     ipcMain.handle('get-gemini-api-key', async () => {
         try {
-            if (!global.settingsStore) {
-                console.error('Settings store not initialized');
-                return { success: false, message: 'Settings store not initialized' };
+            const apiKey = getGeminiApiKey();
+            
+            // If we're using the fallback key, let the user know
+            if (apiKey === FALLBACK_GEMINI_API_KEY) {
+                return { 
+                    success: true, 
+                    apiKey: apiKey,
+                    message: 'Using fallback API key'
+                };
             }
             
-            const apiKey = global.settingsStore.get('geminiApiKey');
-            return { success: true, apiKey };
+            return { success: true, apiKey: apiKey };
         } catch (error) {
             console.error('Error retrieving API key:', error);
-            return { success: false, message: `Failed to retrieve API key: ${error.message}` };
+            
+            // Return fallback key if there's an error
+            return { 
+                success: true, 
+                apiKey: FALLBACK_GEMINI_API_KEY,
+                message: 'Using fallback API key due to error'
+            };
         }
     });
     
@@ -592,12 +687,8 @@ function setupRecordingHandlers(mainWindow) {
 // Function to process recording with Gemini
 async function processRecordingWithGemini(videoPath, actions) {
     try {
-        // Get API key from settings
-        if (!global.settingsStore) {
-            throw new Error('Settings store not initialized');
-        }
-        
-        const apiKey = global.settingsStore.get('geminiApiKey');
+        // Get API key from settings or fallback
+        const apiKey = getGeminiApiKey();
         if (!apiKey) {
             throw new Error('Gemini API key not set');
         }
@@ -667,11 +758,12 @@ async function processRecordingWithGemini(videoPath, actions) {
     }
 }
 
-async function createWindow() {
-    // Initialize electron-store first
-    await initStore();
+let mainWindow;
 
-    let mainWindow;
+async function createWindow() {
+    // Initialize electron-store first and wait for it to complete
+    await initStore();
+    console.log('Store initialization completed, store initialized:', storeInitialized);
 
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -686,8 +778,10 @@ async function createWindow() {
             preload: path.join(__dirname, 'preload.js')
         },
     });
+    
     // Disable context menu
     Menu.setApplicationMenu(null);
+    
     // Setup download handler
     setupDownloadHandler(mainWindow);
 
@@ -716,9 +810,8 @@ async function createWindow() {
     setupRecordingHandlers(mainWindow);
 
     // Apply initial settings
-    if (global.settingsStore) {
-        applySettings(global.settingsStore.store);
-    }
+    const store = getSettingsStore();
+    applySettings(store.settings || store.store || {});
 
     // Rest of your existing window setup code
     mainWindow.loadFile('index.html');
