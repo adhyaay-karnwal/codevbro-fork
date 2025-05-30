@@ -177,18 +177,19 @@ function createRecordingUI() {
             }
             
             .results-panel {
-                display: none;
+                display: block;
                 position: fixed;
                 top: 0;
                 right: 0;
                 width: 400px;
                 height: 100%;
                 background-color: var(--panel-bg);
-                box-shadow: -2px 0 5px rgba(0, 0, 0, 0.2);
+                box-shadow: -5px 0 15px rgba(0, 0, 0, 0.3);
                 z-index: 9000;
                 overflow-y: auto;
                 transition: transform 0.3s ease;
                 transform: translateX(100%);
+                border-left: 1px solid var(--border-color);
             }
             
             .results-panel.active {
@@ -196,34 +197,71 @@ function createRecordingUI() {
             }
             
             .results-header {
-                padding: 10px;
+                padding: 15px;
                 background-color: var(--header-bg);
                 border-bottom: 1px solid var(--border-color);
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+                position: sticky;
+                top: 0;
+                z-index: 1;
+            }
+            
+            .results-header h2 {
+                margin: 0;
+                font-size: 18px;
+                color: var(--text-color);
+            }
+            
+            .results-header button {
+                background: none;
+                border: none;
+                font-size: 18px;
+                cursor: pointer;
+                color: var(--text-color);
             }
             
             .results-content {
-                padding: 15px;
+                padding: 20px;
+                color: var(--text-color);
             }
             
             .results-step {
-                margin-bottom: 15px;
-                padding-bottom: 10px;
+                margin-bottom: 20px;
+                padding-bottom: 15px;
                 border-bottom: 1px solid var(--border-color);
+                line-height: 1.5;
+                font-size: 15px;
+            }
+            
+            .results-step:last-child {
+                border-bottom: none;
+            }
+            
+            .results-footer {
+                padding: 15px;
+                background-color: var(--header-bg);
+                border-top: 1px solid var(--border-color);
+                display: flex;
+                justify-content: flex-end;
+                position: sticky;
+                bottom: 0;
             }
             
             .copy-button {
-                background-color: var(--button-bg);
+                background-color: #4CAF50;
+                color: white;
                 border: none;
-                padding: 5px 10px;
+                padding: 8px 15px;
                 cursor: pointer;
                 border-radius: 3px;
+                font-weight: bold;
+                transition: background-color 0.2s;
             }
             
             .copy-button:hover {
-                background-color: var(--button-hover);
+                background-color: #45a049;
             }
             
             .source-selection-modal {
@@ -295,6 +333,48 @@ function createRecordingUI() {
                 font-size: 0.8em;
                 color: #666;
                 word-break: break-all;
+            }
+            
+            /* Results loading animation */
+            .results-loading {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding: 30px;
+                text-align: center;
+            }
+            
+            .loading-spinner {
+                border: 4px solid rgba(0, 0, 0, 0.1);
+                border-radius: 50%;
+                border-top: 4px solid #3498db;
+                width: 40px;
+                height: 40px;
+                animation: spin 1s linear infinite;
+                margin-bottom: 15px;
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            
+            /* Empty state */
+            .empty-results {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding: 40px 20px;
+                text-align: center;
+                color: #666;
+            }
+            
+            .empty-results-icon {
+                font-size: 48px;
+                margin-bottom: 15px;
+                opacity: 0.5;
             }
         `;
         document.head.appendChild(style);
@@ -407,17 +487,26 @@ function initializeResultsPanel() {
     debugLog('Initializing results panel');
     
     try {
+        // Remove existing panel if it exists
+        const existingPanel = document.getElementById('resultsPanel');
+        if (existingPanel) {
+            existingPanel.remove();
+        }
+        
         // Create panel
         resultsPanel = document.createElement('div');
         resultsPanel.id = 'resultsPanel';
         resultsPanel.className = 'results-panel';
         resultsPanel.innerHTML = `
             <div class="results-header">
-                <h2>Recording Results</h2>
-                <button id="closeResults">✕</button>
+                <h2>Step-by-Step Instructions</h2>
+                <button id="closeResults" title="Close">✕</button>
             </div>
             <div class="results-content" id="resultsContent">
-                <p>No recording results yet.</p>
+                <div class="empty-results">
+                    <div class="empty-results-icon">📋</div>
+                    <p>No recording results yet. Start a recording to see AI-generated instructions here.</p>
+                </div>
             </div>
             <div class="results-footer">
                 <button id="copyAllResults" class="copy-button">Copy All Steps</button>
@@ -429,7 +518,7 @@ function initializeResultsPanel() {
         
         // Add event listeners
         document.getElementById('closeResults')?.addEventListener('click', () => {
-            resultsPanel.classList.remove('active');
+            hideResultsPanel();
         });
         
         document.getElementById('copyAllResults')?.addEventListener('click', () => {
@@ -449,6 +538,70 @@ function initializeResultsPanel() {
         debugLog('Results panel initialized');
     } catch (error) {
         console.error('Error initializing results panel:', error);
+    }
+}
+
+// Show results panel with loading state
+function showResultsPanelLoading() {
+    debugLog('Showing results panel in loading state');
+    
+    try {
+        if (!resultsPanel) {
+            debugLog('Results panel not initialized, initializing now');
+            initializeResultsPanel();
+        }
+        
+        // Set loading content
+        const resultsContent = document.getElementById('resultsContent');
+        if (resultsContent) {
+            resultsContent.innerHTML = `
+                <div class="results-loading">
+                    <div class="loading-spinner"></div>
+                    <p>Analyzing recording with Google Gemini AI...</p>
+                    <p>This may take a moment depending on the length of your recording.</p>
+                </div>
+            `;
+        }
+        
+        // Show panel
+        showResultsPanel();
+    } catch (error) {
+        console.error('Error showing results panel loading state:', error);
+    }
+}
+
+// Show results panel
+function showResultsPanel() {
+    debugLog('Showing results panel');
+    
+    try {
+        if (!resultsPanel) {
+            debugLog('Results panel not initialized, initializing now');
+            initializeResultsPanel();
+        }
+        
+        // Add active class to show panel
+        resultsPanel.classList.add('active');
+        
+        // Ensure the panel is visible
+        resultsPanel.style.display = 'block';
+        
+        debugLog('Results panel shown');
+    } catch (error) {
+        console.error('Error showing results panel:', error);
+    }
+}
+
+// Hide results panel
+function hideResultsPanel() {
+    debugLog('Hiding results panel');
+    
+    try {
+        if (resultsPanel) {
+            resultsPanel.classList.remove('active');
+        }
+    } catch (error) {
+        console.error('Error hiding results panel:', error);
     }
 }
 
@@ -843,6 +996,9 @@ async function startRecordingWithSource(source) {
                 
                 showNotification('Processing recording with Gemini...', 'info');
                 
+                // Show loading state in results panel
+                showResultsPanelLoading();
+                
                 // Send to main process for Gemini processing
                 let result;
                 if (window.ipcRenderer) {
@@ -859,12 +1015,16 @@ async function startRecordingWithSource(source) {
                     });
                 }
                 
+                debugLog('Received Gemini processing result:', result);
+                
                 // Handle result
                 if (result.success) {
-                    showNotification('Recording processed successfully', 'success');
+                    showNotification('✅ AI analysis complete! Showing step-by-step instructions.', 'success');
                     displayRecordingResults(result.instructions);
                 } else {
                     showNotification(`Processing failed: ${result.message}`, 'error');
+                    // Show error in results panel
+                    displayProcessingError(result.message);
                 }
                 
                 // Clean up
@@ -872,6 +1032,8 @@ async function startRecordingWithSource(source) {
             } catch (error) {
                 console.error('Error processing recording:', error);
                 showNotification(`Error processing recording: ${error.message}`, 'error');
+                // Show error in results panel
+                displayProcessingError(error.message);
                 cleanupRecording();
             }
         };
@@ -1200,14 +1362,15 @@ function showNotification(message, type = 'info') {
                     position: fixed;
                     top: 20px;
                     right: 20px;
-                    padding: 10px 15px;
-                    border-radius: 4px;
+                    padding: 15px 20px;
+                    border-radius: 5px;
                     color: white;
                     font-weight: bold;
                     z-index: 10000;
                     opacity: 0;
                     transition: opacity 0.3s ease;
-                    max-width: 300px;
+                    max-width: 400px;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
                 }
                 
                 .notification.show {
@@ -1243,54 +1406,112 @@ function showNotification(message, type = 'info') {
         notification.classList.add('show');
     }, 10);
     
-    // Hide after 3 seconds
+    // Hide after 5 seconds for regular notifications, 8 seconds for success
+    const displayTime = type === 'success' ? 8000 : 5000;
+    
     setTimeout(() => {
         notification.classList.remove('show');
-    }, 3000);
+    }, displayTime);
 }
 
 // Display recording results
 function displayRecordingResults(instructions) {
-    debugLog('Displaying recording results');
+    debugLog('Displaying recording results:', instructions);
     
-    const resultsContent = document.getElementById('resultsContent');
-    if (!resultsContent) {
-        console.error('Results content element not found');
-        return;
-    }
-    
-    // Format instructions as steps
-    let formattedInstructions = '';
-    
-    if (typeof instructions === 'string') {
-        // Check if instructions are already formatted as numbered steps
-        if (instructions.match(/^\d+\.\s/m)) {
-            formattedInstructions = instructions;
-        } else {
-            // Format as numbered steps
-            formattedInstructions = instructions
-                .split('\n')
-                .filter(line => line.trim().length > 0)
-                .map((line, index) => `${index + 1}. ${line}`)
-                .join('\n');
+    try {
+        const resultsContent = document.getElementById('resultsContent');
+        if (!resultsContent) {
+            console.error('Results content element not found');
+            return;
         }
-    } else {
-        formattedInstructions = 'No instructions generated.';
+        
+        // Format instructions as steps
+        let formattedInstructions = '';
+        
+        if (typeof instructions === 'string') {
+            // Check if instructions are already formatted as numbered steps
+            if (instructions.match(/^\d+\.\s/m)) {
+                formattedInstructions = instructions;
+            } else {
+                // Format as numbered steps
+                formattedInstructions = instructions
+                    .split('\n')
+                    .filter(line => line.trim().length > 0)
+                    .map((line, index) => `${index + 1}. ${line}`)
+                    .join('\n');
+            }
+        } else {
+            formattedInstructions = 'No instructions generated.';
+        }
+        
+        // Create HTML for steps
+        const stepsHtml = formattedInstructions
+            .split('\n')
+            .filter(line => line.trim().length > 0)
+            .map(step => {
+                // Enhance URLs to be clickable
+                const enhancedStep = step.replace(
+                    /(https?:\/\/[^\s]+)/g, 
+                    '<a href="$1" target="_blank" style="color: #007bff; text-decoration: underline;">$1</a>'
+                );
+                
+                return `<div class="results-step">${enhancedStep}</div>`;
+            })
+            .join('');
+        
+        // Update panel content
+        resultsContent.innerHTML = stepsHtml || '<p>No steps generated.</p>';
+        
+        // Show panel
+        showResultsPanel();
+        
+        // Add a subtle animation to draw attention
+        resultsPanel.animate(
+            [
+                { transform: 'translateX(10px)' },
+                { transform: 'translateX(-10px)' },
+                { transform: 'translateX(10px)' },
+                { transform: 'translateX(-10px)' },
+                { transform: 'translateX(0)' }
+            ],
+            { 
+                duration: 500,
+                easing: 'ease-in-out'
+            }
+        );
+        
+        debugLog('Results displayed successfully');
+    } catch (error) {
+        console.error('Error displaying recording results:', error);
+        showNotification('Error displaying results', 'error');
     }
+}
+
+// Display processing error in results panel
+function displayProcessingError(errorMessage) {
+    debugLog('Displaying processing error:', errorMessage);
     
-    // Create HTML for steps
-    const stepsHtml = formattedInstructions
-        .split('\n')
-        .filter(line => line.trim().length > 0)
-        .map(step => `<div class="results-step">${step}</div>`)
-        .join('');
-    
-    // Update panel content
-    resultsContent.innerHTML = stepsHtml || '<p>No steps generated.</p>';
-    
-    // Show panel
-    if (resultsPanel) {
-        resultsPanel.classList.add('active');
+    try {
+        const resultsContent = document.getElementById('resultsContent');
+        if (!resultsContent) {
+            console.error('Results content element not found');
+            return;
+        }
+        
+        // Create error message HTML
+        resultsContent.innerHTML = `
+            <div class="empty-results" style="color: #d32f2f;">
+                <div class="empty-results-icon">⚠️</div>
+                <h3>Processing Error</h3>
+                <p>${errorMessage || 'An unknown error occurred while processing the recording.'}</p>
+                <p style="margin-top: 20px;">Try recording again with a shorter duration or different window.</p>
+            </div>
+        `;
+        
+        // Show panel
+        showResultsPanel();
+    } catch (error) {
+        console.error('Error displaying processing error:', error);
     }
 }
 
