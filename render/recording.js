@@ -225,6 +225,77 @@ function createRecordingUI() {
             .copy-button:hover {
                 background-color: var(--button-hover);
             }
+            
+            .source-selection-modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.5);
+                z-index: 9999;
+            }
+            
+            .source-selection-content {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background-color: var(--panel-bg);
+                padding: 20px;
+                border-radius: 5px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+                width: 600px;
+                max-width: 90%;
+                max-height: 80vh;
+                overflow-y: auto;
+            }
+            
+            .source-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+                gap: 15px;
+                margin-top: 15px;
+            }
+            
+            .source-item {
+                border: 2px solid var(--border-color);
+                border-radius: 5px;
+                padding: 10px;
+                cursor: pointer;
+                transition: border-color 0.3s;
+                display: flex;
+                flex-direction: column;
+            }
+            
+            .source-item:hover {
+                border-color: #007bff;
+            }
+            
+            .source-item.selected {
+                border-color: #28a745;
+                background-color: rgba(40, 167, 69, 0.1);
+            }
+            
+            .source-thumbnail {
+                width: 100%;
+                height: 150px;
+                object-fit: contain;
+                margin-bottom: 10px;
+            }
+            
+            .source-name {
+                font-weight: bold;
+                margin-bottom: 5px;
+                word-break: break-word;
+            }
+            
+            .source-id {
+                font-size: 0.8em;
+                color: #666;
+                word-break: break-all;
+            }
         `;
         document.head.appendChild(style);
         debugLog('Recording styles added');
@@ -279,6 +350,55 @@ function initializeAPIKeyModal() {
         }
     } catch (error) {
         console.error('Error initializing API key modal:', error);
+    }
+}
+
+// Initialize source selection modal
+function initializeSourceSelectionModal() {
+    debugLog('Initializing source selection modal');
+    
+    try {
+        // Remove existing modal if it exists
+        const existingModal = document.getElementById('sourceSelectionModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.id = 'sourceSelectionModal';
+        modal.className = 'source-selection-modal';
+        modal.innerHTML = `
+            <div class="source-selection-content">
+                <h2>Select Window to Record</h2>
+                <p>Choose which window you want to record:</p>
+                <div id="sourceGrid" class="source-grid"></div>
+                <div class="api-key-modal-buttons">
+                    <button id="cancelSourceSelection">Cancel</button>
+                    <button id="confirmSourceSelection" disabled>Start Recording</button>
+                </div>
+            </div>
+        `;
+        
+        // Add to body
+        document.body.appendChild(modal);
+        
+        // Add event listeners
+        document.getElementById('cancelSourceSelection')?.addEventListener('click', () => {
+            modal.style.display = 'none';
+        });
+        
+        // Close modal when clicking outside
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+        
+        return modal;
+    } catch (error) {
+        console.error('Error initializing source selection modal:', error);
+        return null;
     }
 }
 
@@ -475,6 +595,87 @@ async function saveAPIKey() {
     }
 }
 
+// Show source selection modal
+async function showSourceSelectionModal(sources) {
+    debugLog('Showing source selection modal with sources:', sources);
+    
+    try {
+        // Initialize modal
+        const modal = initializeSourceSelectionModal();
+        if (!modal) {
+            throw new Error('Failed to initialize source selection modal');
+        }
+        
+        // Get grid container
+        const sourceGrid = document.getElementById('sourceGrid');
+        if (!sourceGrid) {
+            throw new Error('Source grid element not found');
+        }
+        
+        // Clear existing content
+        sourceGrid.innerHTML = '';
+        
+        // Add sources to grid
+        sources.forEach(source => {
+            const sourceItem = document.createElement('div');
+            sourceItem.className = 'source-item';
+            sourceItem.dataset.sourceId = source.id;
+            
+            // Create thumbnail if available
+            let thumbnailHtml = '';
+            if (source.thumbnail) {
+                thumbnailHtml = `<img src="${source.thumbnail}" class="source-thumbnail" alt="${source.name}">`;
+            }
+            
+            sourceItem.innerHTML = `
+                ${thumbnailHtml}
+                <div class="source-name">${source.name}</div>
+                <div class="source-id">${source.id.substring(0, 20)}...</div>
+            `;
+            
+            // Add click handler
+            sourceItem.addEventListener('click', () => {
+                // Remove selected class from all items
+                document.querySelectorAll('.source-item').forEach(item => {
+                    item.classList.remove('selected');
+                });
+                
+                // Add selected class to this item
+                sourceItem.classList.add('selected');
+                
+                // Enable confirm button
+                const confirmButton = document.getElementById('confirmSourceSelection');
+                if (confirmButton) {
+                    confirmButton.disabled = false;
+                }
+            });
+            
+            sourceGrid.appendChild(sourceItem);
+        });
+        
+        // Add confirm button handler
+        const confirmButton = document.getElementById('confirmSourceSelection');
+        if (confirmButton) {
+            confirmButton.addEventListener('click', () => {
+                const selectedItem = document.querySelector('.source-item.selected');
+                if (selectedItem) {
+                    const sourceId = selectedItem.dataset.sourceId;
+                    modal.style.display = 'none';
+                    
+                    // Start recording with selected source
+                    startRecordingWithSource(sources.find(s => s.id === sourceId));
+                }
+            });
+        }
+        
+        // Show modal
+        modal.style.display = 'block';
+    } catch (error) {
+        console.error('Error showing source selection modal:', error);
+        showNotification('Failed to show source selection', 'error');
+    }
+}
+
 // Start recording
 async function startRecording() {
     debugLog('Starting recording');
@@ -518,21 +719,94 @@ async function startRecording() {
             throw new Error(`Failed to get screen sources: ${sourcesResult.message}`);
         }
         
-        debugLog('Available sources:', sourcesResult.sources);
-        
-        // Find the browser window source
         const sources = sourcesResult.sources;
-        const browserSource = sources.find(source => 
-            source.name.includes('codebro') || 
-            source.name.includes('Electron') || 
-            source.name.toLowerCase().includes('browser')
-        );
+        debugLog('Available sources:', sources);
+        
+        // Log all source names for debugging
+        debugLog('Source names:', sources.map(s => s.name));
+        
+        // Try to find the browser window with multiple strategies
+        let browserSource = findBrowserSource(sources);
         
         if (!browserSource) {
-            throw new Error('Could not find browser window for recording');
+            // If no automatic match, show source selection modal
+            showSourceSelectionModal(sources);
+            return;
         }
         
-        debugLog('Selected source:', browserSource);
+        // Start recording with the found source
+        await startRecordingWithSource(browserSource);
+        
+    } catch (error) {
+        console.error('Error starting recording:', error);
+        showNotification(`Failed to start recording: ${error.message}`, 'error');
+        cleanupRecording();
+    }
+}
+
+// Find browser source with multiple strategies
+function findBrowserSource(sources) {
+    debugLog('Finding browser source with multiple strategies');
+    
+    // Strategy 1: Look for exact matches
+    let browserSource = sources.find(source => 
+        source.name.includes('codebro') || 
+        source.name.includes('Electron') || 
+        source.name.toLowerCase().includes('browser')
+    );
+    
+    if (browserSource) {
+        debugLog('Found browser source with exact match:', browserSource.name);
+        return browserSource;
+    }
+    
+    // Strategy 2: Look for common window titles
+    browserSource = sources.find(source => 
+        source.name.toLowerCase().includes('chrome') ||
+        source.name.toLowerCase().includes('firefox') ||
+        source.name.toLowerCase().includes('edge') ||
+        source.name.toLowerCase().includes('safari') ||
+        source.name.toLowerCase().includes('opera') ||
+        source.name.toLowerCase().includes('codesurf') ||
+        source.name.toLowerCase().includes('strawberry')
+    );
+    
+    if (browserSource) {
+        debugLog('Found browser source with common title match:', browserSource.name);
+        return browserSource;
+    }
+    
+    // Strategy 3: Look for window sources (not screens)
+    const windowSources = sources.filter(source => 
+        !source.name.toLowerCase().includes('screen') &&
+        !source.name.toLowerCase().includes('entire') &&
+        !source.name.toLowerCase().includes('monitor')
+    );
+    
+    if (windowSources.length > 0) {
+        debugLog('Found window sources (not screens):', windowSources.map(s => s.name));
+        return windowSources[0]; // Return the first window source
+    }
+    
+    // Strategy 4: If all else fails, just return the first source
+    if (sources.length > 0) {
+        debugLog('No specific browser source found, using first available source:', sources[0].name);
+        return sources[0];
+    }
+    
+    // No sources found
+    debugLog('No sources found at all');
+    return null;
+}
+
+// Start recording with a specific source
+async function startRecordingWithSource(source) {
+    debugLog('Starting recording with source:', source);
+    
+    try {
+        if (!source) {
+            throw new Error('No source provided for recording');
+        }
         
         // Create MediaStream
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -540,7 +814,7 @@ async function startRecording() {
             video: {
                 mandatory: {
                     chromeMediaSource: 'desktop',
-                    chromeMediaSourceId: browserSource.id
+                    chromeMediaSourceId: source.id
                 }
             }
         });
@@ -624,7 +898,7 @@ async function startRecording() {
             // Start timer
             startRecordingTimer();
             
-            showNotification('Recording started', 'success');
+            showNotification(`Recording started: ${source.name}`, 'success');
             
             // Set up automatic stop after max duration (5 minutes)
             setTimeout(() => {
@@ -638,7 +912,7 @@ async function startRecording() {
             throw new Error(result.message);
         }
     } catch (error) {
-        console.error('Error starting recording:', error);
+        console.error('Error starting recording with source:', error);
         showNotification(`Failed to start recording: ${error.message}`, 'error');
         cleanupRecording();
     }
