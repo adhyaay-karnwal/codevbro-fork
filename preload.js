@@ -1,17 +1,21 @@
-const { contextBridge, ipcRenderer, desktopCapturer } = require('electron');
+const { ipcRenderer, desktopCapturer } = require('electron');
 
-// Expose limited APIs to the renderer process
-contextBridge.exposeInMainWorld('api', {
+// Since contextIsolation is false, we can directly assign to window object
+// This makes ipcRenderer directly available for indicator.js and other files
+window.ipcRenderer = ipcRenderer;
+
+// Expose limited APIs to the renderer process (same structure as before)
+window.api = {
     navigate: (url) => ipcRenderer.send('navigate', url),
     goBack: () => ipcRenderer.send('go-back'),
     goForward: () => ipcRenderer.send('go-forward'),
     
     onNavigate: (callback) => ipcRenderer.on('did-navigate', (event, url) => callback(url)),
     onError: (callback) => ipcRenderer.on('navigation-error', (event, error) => callback(error)),
-});
+};
 
 // Expose electron APIs for recording functionality
-contextBridge.exposeInMainWorld('electron', {
+window.electron = {
     // IPC communication
     ipcRenderer: {
         // Send events to main process
@@ -33,7 +37,10 @@ contextBridge.exposeInMainWorld('electron', {
                 'get-gemini-api-key',
                 'get-recording-status',
                 'get-screen-sources',
-                'process-recording'
+                'process-recording',
+                'get-network-speed',
+                'get-ram-usage',
+                'get-battery-status'
             ];
             if (validChannels.includes(channel)) {
                 return ipcRenderer.invoke(channel, ...args);
@@ -71,4 +78,4 @@ contextBridge.exposeInMainWorld('electron', {
     desktopCapturer: {
         getSources: (options) => desktopCapturer.getSources(options)
     }
-});
+};

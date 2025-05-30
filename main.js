@@ -648,7 +648,8 @@ async function createWindow() {
             nodeIntegration: true,
             contextIsolation: false,
             webviewTag: true,
-            webSecurity: false
+            webSecurity: false,
+            preload: path.join(__dirname, 'preload.js')
         },
     });
     // Disable context menu
