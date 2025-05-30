@@ -42,8 +42,10 @@ async function initStore() {
 
         // Expose settingsStore to other functions
         global.settingsStore = settingsStore;
+        console.log('Electron store initialized successfully');
     } catch (error) {
         console.error('Failed to initialize electron-store:', error);
+        global.settingsStore = null; // Set to null so we can check for it later
     }
 }
 
@@ -233,11 +235,20 @@ function setupDownloadHandler(mainWindow) {
 function setupSettingsHandlers() {
     // Get current settings
     ipcMain.handle('get-settings', () => {
+        if (!global.settingsStore) {
+            console.error('Settings store not initialized');
+            return {};
+        }
         return global.settingsStore.store;
     });
 
     // Update settings
     ipcMain.on('update-settings', (event, settings) => {
+        if (!global.settingsStore) {
+            console.error('Settings store not initialized');
+            return;
+        }
+        
         // Update individual settings
         Object.keys(settings).forEach(key => {
             global.settingsStore.set(key, settings[key]);
@@ -249,6 +260,11 @@ function setupSettingsHandlers() {
 
     // Change download location
     ipcMain.handle('choose-download-location', async () => {
+        if (!global.settingsStore) {
+            console.error('Settings store not initialized');
+            return app.getPath('downloads');
+        }
+        
         const { dialog } = require('electron');
         const result = await dialog.showOpenDialog(mainWindow, {
             properties: ['openDirectory']
@@ -260,7 +276,7 @@ function setupSettingsHandlers() {
             return selectedPath;
         }
 
-        return global.settingsStore.get('downloadLocation');
+        return global.settingsStore.get('downloadLocation') || app.getPath('downloads');
     });
 }
 
@@ -440,6 +456,10 @@ function setupRecordingHandlers(mainWindow) {
             }
 
             // Check if Gemini API key is set
+            if (!global.settingsStore) {
+                return { success: false, message: 'Settings store not initialized' };
+            }
+            
             const apiKey = global.settingsStore.get('geminiApiKey');
             if (!apiKey) {
                 return { success: false, message: 'Gemini API key not set. Please set it in settings.' };
@@ -534,6 +554,11 @@ function setupRecordingHandlers(mainWindow) {
     // Handler for setting Gemini API key
     ipcMain.handle('set-gemini-api-key', async (event, apiKey) => {
         try {
+            if (!global.settingsStore) {
+                console.error('Settings store not initialized');
+                return { success: false, message: 'Settings store not initialized' };
+            }
+            
             global.settingsStore.set('geminiApiKey', apiKey);
             return { success: true, message: 'API key saved' };
         } catch (error) {
@@ -545,6 +570,11 @@ function setupRecordingHandlers(mainWindow) {
     // Handler for getting Gemini API key
     ipcMain.handle('get-gemini-api-key', async () => {
         try {
+            if (!global.settingsStore) {
+                console.error('Settings store not initialized');
+                return { success: false, message: 'Settings store not initialized' };
+            }
+            
             const apiKey = global.settingsStore.get('geminiApiKey');
             return { success: true, apiKey };
         } catch (error) {
@@ -563,6 +593,10 @@ function setupRecordingHandlers(mainWindow) {
 async function processRecordingWithGemini(videoPath, actions) {
     try {
         // Get API key from settings
+        if (!global.settingsStore) {
+            throw new Error('Settings store not initialized');
+        }
+        
         const apiKey = global.settingsStore.get('geminiApiKey');
         if (!apiKey) {
             throw new Error('Gemini API key not set');
