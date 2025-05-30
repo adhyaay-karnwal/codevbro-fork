@@ -291,6 +291,10 @@ input {
 
 .browser-controls {
     position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
 }
 
 #urlSuggestions {
@@ -842,4 +846,137 @@ input {
 @keyframes blink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
+}
+
+/* Recording Controls Styles */
+.recording-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 10px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background-color: var(--panel-bg);
+    border: 1px solid var(--border-color);
+}
+
+.recording-controls button {
+    background-color: var(--button-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.1s;
+}
+
+.recording-controls button:hover {
+    background-color: var(--button-hover);
+}
+
+.recording-controls button:active {
+    transform: scale(0.97);
+}
+
+.recording-controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#startRecording {
+    color: #ff3333;
+    font-weight: bold;
+}
+
+#stopRecording {
+    color: #333;
+}
+
+.recording-status {
+    font-size: 0.9em;
+    color: var(--text-color);
+    margin: 0 5px;
+}
+
+.recording-timer {
+    font-family: monospace;
+    font-size: 1em;
+    color: var(--text-color);
+    min-width: 45px;
+    text-align: center;
+}
+
+.recording-active {
+    color: #ff3333 !important;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.6; }
+    100% { opacity: 1; }
+}
+
+.api-key-modal {
+    z-index: 9999;
+}
+
+.api-key-modal-content {
+    background-color: var(--panel-bg);
+    color: var(--text-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.results-panel {
+    background-color: var(--panel-bg);
+    color: var(--text-color);
+    border-left: 1px solid var(--border-color);
+}
+
+.results-panel .results-header {
+    background-color: var(--header-bg);
+}
+
+.results-panel .results-step {
+    border-bottom: 1px solid var(--border-color);
+    padding: 10px;
+}
+
+.notification {
+    background-color: var(--panel-bg);
+    color: var(--text-color);
+    border-color: var(--border-color);
+}
+
+.notification.success {
+    border-left: 4px solid #4CAF50;
+}
+
+.notification.error {
+    border-left: 4px solid #F44336;
+}
+
+.notification.info {
+    border-left: 4px solid #2196F3;
+}
+
+/* Responsive design for recording controls */
+@media (max-width: 768px) {
+    .recording-controls {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    
+    .recording-status {
+        width: 100%;
+        text-align: center;
+        margin: 5px 0;
+    }
+    
+    .browser-controls {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
 }

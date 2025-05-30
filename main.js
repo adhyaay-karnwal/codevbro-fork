@@ -1,9 +1,20 @@
 const { app, BrowserWindow, ipcMain, session, Menu } = require('electron');
+const { desktopCapturer } = require('electron');
 const path = require('path');
 const { net } = require('electron');
 const https = require('https');
 const os = require('os');
 const { networkInterfaces } = require('systeminformation');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const fs = require('fs');
+const { Readable } = require('stream');
+const mime = require('mime-types');
+
+// Recording state variables
+let isRecording = false;
+let actionLog = [];
+let recordingStartTime = null;
+const MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
 
 let Store;
 
@@ -24,7 +35,8 @@ async function initStore() {
                 hardwareAcceleration: true,
                 downloadLocation: app.getPath('downloads'),
                 vpnAutoConnect: false,
-                searchEngine: 'google'
+                searchEngine: 'google',
+                geminiApiKey: ''
             }
         });
 
@@ -396,6 +408,231 @@ async function getLinuxBatteryStatus() {
     }
 }
 
+// Screen Recording Functionality
+function setupRecordingHandlers(mainWindow) {
+    // Handler for getting screen sources
+    ipcMain.handle('get-screen-sources', async () => {
+        try {
+            const sources = await desktopCapturer.getSources({
+                types: ['window', 'screen'],
+                thumbnailSize: { width: 150, height: 150 }
+            });
+            
+            return {
+                success: true,
+                sources: sources.map(source => ({
+                    id: source.id,
+                    name: source.name,
+                    thumbnail: source.thumbnail.toDataURL()
+                }))
+            };
+        } catch (error) {
+            console.error('Error getting screen sources:', error);
+            return { success: false, message: error.message };
+        }
+    });
+    
+    // Handler for starting screen recording
+    ipcMain.handle('start-recording', async () => {
+        try {
+            if (isRecording) {
+                return { success: false, message: 'Recording already in progress' };
+            }
+
+            // Check if Gemini API key is set
+            const apiKey = global.settingsStore.get('geminiApiKey');
+            if (!apiKey) {
+                return { success: false, message: 'Gemini API key not set. Please set it in settings.' };
+            }
+
+            // Reset action log
+            actionLog = [];
+            
+            // Set recording state
+            isRecording = true;
+            recordingStartTime = Date.now();
+            
+            // Notify renderer
+            mainWindow.webContents.send('recording-status-changed', { isRecording: true });
+            
+            return { success: true, message: 'Recording started' };
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            return { success: false, message: `Failed to start recording: ${error.message}` };
+        }
+    });
+    
+    // Handler for stopping screen recording
+    ipcMain.handle('stop-recording', async () => {
+        try {
+            if (!isRecording) {
+                return { success: false, message: 'No recording in progress' };
+            }
+            
+            // Update state
+            isRecording = false;
+            
+            // Notify renderer
+            mainWindow.webContents.send('recording-status-changed', { isRecording: false });
+            
+            return { success: true, message: 'Recording stopped' };
+        } catch (error) {
+            console.error('Error stopping recording:', error);
+            return { success: false, message: `Failed to stop recording: ${error.message}` };
+        }
+    });
+    
+    // Handler for receiving recorded video from renderer
+    ipcMain.handle('process-recording', async (event, { buffer, mimeType }) => {
+        try {
+            // Save to temporary file
+            const tempDir = path.join(os.tmpdir(), 'codebro-recordings');
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+            }
+            
+            const videoPath = path.join(tempDir, `recording-${Date.now()}.webm`);
+            fs.writeFileSync(videoPath, Buffer.from(buffer));
+            
+            // Process with Gemini
+            try {
+                const instructions = await processRecordingWithGemini(videoPath, actionLog);
+                return {
+                    success: true,
+                    instructions
+                };
+            } catch (error) {
+                console.error('Error processing recording with Gemini:', error);
+                return {
+                    success: false,
+                    message: `Error processing recording: ${error.message}`
+                };
+            } finally {
+                // Clean up temporary file
+                if (fs.existsSync(videoPath)) {
+                    fs.unlinkSync(videoPath);
+                }
+            }
+        } catch (error) {
+            console.error('Error processing recording:', error);
+            return { success: false, message: `Failed to process recording: ${error.message}` };
+        }
+    });
+    
+    // Handler for logging user actions
+    ipcMain.on('log-action', (event, action) => {
+        if (isRecording) {
+            // Add timestamp relative to recording start
+            const timestamp = Date.now() - recordingStartTime;
+            actionLog.push({
+                ...action,
+                timestamp
+            });
+        }
+    });
+    
+    // Handler for setting Gemini API key
+    ipcMain.handle('set-gemini-api-key', async (event, apiKey) => {
+        try {
+            global.settingsStore.set('geminiApiKey', apiKey);
+            return { success: true, message: 'API key saved' };
+        } catch (error) {
+            console.error('Error saving API key:', error);
+            return { success: false, message: `Failed to save API key: ${error.message}` };
+        }
+    });
+    
+    // Handler for getting Gemini API key
+    ipcMain.handle('get-gemini-api-key', async () => {
+        try {
+            const apiKey = global.settingsStore.get('geminiApiKey');
+            return { success: true, apiKey };
+        } catch (error) {
+            console.error('Error retrieving API key:', error);
+            return { success: false, message: `Failed to retrieve API key: ${error.message}` };
+        }
+    });
+    
+    // Handler for getting recording status
+    ipcMain.handle('get-recording-status', () => {
+        return { isRecording };
+    });
+}
+
+// Function to process recording with Gemini
+async function processRecordingWithGemini(videoPath, actions) {
+    try {
+        // Get API key from settings
+        const apiKey = global.settingsStore.get('geminiApiKey');
+        if (!apiKey) {
+            throw new Error('Gemini API key not set');
+        }
+        
+        // Initialize Gemini API
+        const genAI = new GoogleGenerativeAI(apiKey);
+        // Use gemini-2.0-flash-exp model instead of gemini-pro-vision
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+        
+        // Read video file
+        const videoBuffer = fs.readFileSync(videoPath);
+        const mimeType = mime.lookup(videoPath) || 'video/webm';
+        
+        // Prepare action log as text
+        const actionsText = actions.map((action, index) => {
+            const time = (action.timestamp / 1000).toFixed(2); // Convert to seconds
+            return `${index + 1}. [${time}s] ${action.type}: ${action.details}`;
+        }).join('\n');
+        
+        // Prepare prompt for Gemini
+        const prompt = `
+        I have a screen recording of a web browsing session with the following user actions:
+        
+        ${actionsText}
+        
+        Please analyze the video and provide a detailed, step-by-step guide of what the user did.
+        Format the response as numbered steps that a human could follow to replicate the actions.
+        Include URLs visited, buttons clicked, text entered, and any other relevant details.
+        Be specific and clear with each instruction.
+        `;
+        
+        // Create parts for the multimodal request
+        const parts = [
+            { text: prompt },
+            {
+                inlineData: {
+                    mimeType: mimeType,
+                    data: videoBuffer.toString('base64')
+                }
+            }
+        ];
+        
+        // Send request to Gemini
+        const result = await model.generateContent({
+            contents: [{ role: "user", parts }],
+            generationConfig: {
+                maxOutputTokens: 2048,
+                temperature: 0.2
+            }
+        });
+        
+        const response = result.response;
+        const text = response.text();
+        
+        // Format the response as numbered steps if not already formatted
+        if (!text.match(/^\d+\.\s/m)) {
+            const steps = text.split('\n')
+                .filter(line => line.trim().length > 0)
+                .map((line, index) => `${index + 1}. ${line}`);
+            return steps.join('\n');
+        }
+        
+        return text;
+    } catch (error) {
+        console.error('Error processing with Gemini:', error);
+        throw error;
+    }
+}
+
 async function createWindow() {
     // Initialize electron-store first
     await initStore();
@@ -439,6 +676,9 @@ async function createWindow() {
 
     // Setup settings handlers
     setupSettingsHandlers();
+
+    // Setup recording handlers
+    setupRecordingHandlers(mainWindow);
 
     // Apply initial settings
     if (global.settingsStore) {
